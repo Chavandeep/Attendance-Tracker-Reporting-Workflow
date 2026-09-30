@@ -1,0 +1,530 @@
+{
+  "name": "Missed Classes Automation Workflow FINAL",
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "manual-date-field",
+              "name": "manual_date",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        13072,
+        3680
+      ],
+      "id": "439918cb-81b1-4f18-94c8-82f3ad307290",
+      "name": "Manual Date (EDIT HERE)"
+    },
+    {
+      "parameters": {
+        "content": "Missed Classes Automation Workflow FINAL"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        13104,
+        3408
+      ],
+      "id": "dd2b1e2e-5e82-4b0a-9067-ad22722dca8e",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 23
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        12880,
+        3680
+      ],
+      "id": "c1be093a-dc43-458d-bbeb-c6d9f441e6c9",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const jwt = \"JWT eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjo4ODQ2MywidXNlcm5hbWUiOjg4NDYzLCJleHAiOjE3NzYzMTc4NDYsImVtYWlsIjoidXRwYWwyMzVAeWFob28uY29tIiwiaWQiOjg4NDYzLCJpbnN0aXR1dGUiOjE1MDl9.xcrfRS1jZA3H44ixYV0t_5HWgna7T0e5-lJG61ZtM8M\";\n\nconst courseIds = [1112 ,1161, 1242, 1245, 1255, 1295, 1296, 1303, 1304, 1305];\n\n// ---- Build chapter_id -> title map. No positional [0]/[1] assumption. ----\nconst chapterTitleById = {};\nconst verbalLectureDates = {};\nfor (const course_id of courseIds) {\n  let url = `https://catking.testpress.in/api/v2.5/admin/courses/${course_id}/chapters/?limit=100`;\n  while (url) {\n    const r = await helpers.request({\n      method: 'GET', url,\n      headers: { 'Authorization': jwt, 'Content-Type': 'application/json' },\n      json: true\n    });\n    for (const c of (r.results || [])) {\n\n  chapterTitleById[String(c.id)] = String(c.name || c.title || '');\n\n  const chapterName = String(c.name || c.title || '').toLowerCase();\n\n  if (\n      chapterName.includes('verbal kickstarter')\n  ) {\n\n      let contentUrl =\n        `https://catking.testpress.in/api/v2.4/courses/${course_id}/contents/?include_child_contents=true`;\n\n      const contents = await helpers.request({\n          method: 'GET',\n          url: contentUrl,\n          headers: {\n              'Authorization': jwt,\n              'Content-Type': 'application/json'\n          },\n          json: true\n      });\n\n      if (!verbalLectureDates[course_id])\n          verbalLectureDates[course_id] = [];\n\n      for (const lecture of (contents.results?.contents || [])) {\n\n          if (\n              lecture.chapter_id == c.id &&\n              lecture.start\n          ) {\n\n              verbalLectureDates[course_id].push(\n                  lecture.start.slice(0,10)\n              );\n\n          }\n\n      }\n\n  }\n\n}\n url = r.next || null;\n}\n}\nconst VPAR_TITLE_RE = /starter\\s*module\\s*vpar|vpar/i;\nconst isVparSession = (chapter_id) =>\n  VPAR_TITLE_RE.test(chapterTitleById[String(chapter_id)] || '');\n\nconst MONTHS = { jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12' };\nfunction toISODate(s) {\n  if (!s) return '';\n  s = String(s).trim();\n  if (/^\\d{4}-\\d{2}-\\d{2}/.test(s)) return s.slice(0, 10);\n  let m = s.match(/^(\\d{1,2})[\\/\\-](\\d{1,2})[\\/\\-](\\d{4})$/);\n  if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;\n  m = s.match(/^(\\d{1,2})[\\-\\s]([A-Za-z]{3,})[\\-\\s](\\d{4})$/);\n  if (m && MONTHS[m[2].slice(0,3).toLowerCase()]) {\n    return `${m[3]}-${MONTHS[m[2].slice(0,3).toLowerCase()]}-${m[1].padStart(2,'0')}`;\n  }\n  const d = new Date(s);\n  return isNaN(d) ? '' : d.toISOString().slice(0, 10);\n}\n\nfunction hasVerbalWeek(studentStartDate, courseId){\n\n    if(!studentStartDate) return false;\n\n    const lectures = verbalLectureDates[String(courseId)] || [];\n\n    const start = new Date(studentStartDate);\n\n    const end = new Date(studentStartDate);\n    end.setDate(end.getDate() + 6);\n\n    for(const d of lectures){\n\n        const lectureDate = new Date(d);\n\n        if(lectureDate >= start && lectureDate <= end){\n            return true;\n        }\n\n    }\n\n    return false;\n\n}\n\nconst allAttended = $('FORMATTING NODE: Compares the google sheet data with JSON Data').all().map(i => i.json);\n\nconst rawSheetRows = $('Order Export (Batch Strength, Last 1.5 years)').all().map(i => i.json);\n\n// Dedupe true duplicate rows: same student + same set of course IDs (order-independent).\n// Different course ID sets for the same email = legitimate separate purchase, kept as-is.\nconst seenRowKeys = new Set();\nconst sheetRows = [];\nfor (const row of rawSheetRows) {\n  const email = row['Email']?.toLowerCase().trim();\n  if (!email) continue;\n\n  const courseIdSet = String(row['TestPress Course Ids'] || '')\n    .split('|')\n    .map(c => c.trim())\n    .filter(Boolean)\n    .sort()\n    .join('|');\n\n  const key = `${email}|${courseIdSet}`;\n\n  if (seenRowKeys.has(key)) continue;\n  seenRowKeys.add(key);\n  sheetRows.push(row);\n}\n\nconst result = [];\nconst seen = new Set();\n\nconst batchMap = { '1112': 'A1', '1161': 'M1.1', '1245': 'M1.2', '1242': 'A2', '1255': 'A3', '1295': 'A4', '1296': 'M2.1', '1303': 'A5', '1305': 'M2.2'};\n\n// ============================================================\n// Date now comes from the \"Manual Date (EDIT HERE)\" node so the\n// whole workflow (API fetch window + this filter) stays in sync.\n// Leave that field blank for live/automatic mode (today's date).\n// Put a date like \"2026-06-30\" there to pull absentees for any\n// past date.\n// ============================================================\nconst manualDate = $('Manual Date (EDIT HERE)').first().json.manual_date;\n\nconst targetDate = manualDate\n    ? manualDate\n    : new Date().toISOString().slice(0, 10);\n\n// ---- FIRST LOOP: Count present/absent per content ----\nconst countsByContent = {};\nfor (const data of allAttended) {\n  if (data.session_date !== targetDate) continue;\n\n  const course_id = String(data.course_id);\n  const contentId = String(data.chapter_content_id);\n  const attendedEmails = data.attended_emails || [];\n  const sessionDate = data.session_date;\n  const vpar = isVparSession(data.chapter_id);\n\n  let absent_count = 0;\n  for (const student of sheetRows) {\n    const studentEmail = student['Email']?.toLowerCase().trim();\n    if (!studentEmail) continue;\n    const rawCourses = student['TestPress Course Ids'];\n    if (!rawCourses) continue;\n    if (!String(rawCourses).split('|').map(c => c.trim()).includes(course_id)) continue;\n\n    const studentStartDate = toISODate(student['TestPress Course Start Date']);\n    if (studentStartDate && sessionDate < studentStartDate) continue;\n\n    const dayDiff = studentStartDate\n      ? Math.floor((new Date(sessionDate) - new Date(studentStartDate)) / 86400000)\n      : 9999;\n\n   if (vpar) continue;\n    const reminderDelay =\n    hasVerbalWeek(studentStartDate, course_id)\n        ? 14\n        : 7;\n    \n\nif (dayDiff >= 0 && dayDiff < reminderDelay)\n    continue;\n\n    if (!attendedEmails.includes(studentEmail)) absent_count++;\n  }\n\n  countsByContent[contentId] = { present_count: attendedEmails.length, absent_count };\n}\n\n// ---- SECOND LOOP: Build reminder list ----\nfor (const data of allAttended) {\n  if (data.session_date !== targetDate) continue;\n\n  const course_id = String(data.course_id);\n  const attendedEmails = data.attended_emails || [];\n  const lectureTitle = data.lecture_title;\n  const contentId = String(data.chapter_content_id);\n  const batch = batchMap[course_id] || course_id;\n  const sessionDate = data.session_date;\n  const vpar = isVparSession(data.chapter_id);\n\n  for (const student of sheetRows) {\n    const studentEmail = student['Email']?.toLowerCase().trim();\n    if (!studentEmail) continue;\n    const rawCourses = student['TestPress Course Ids'];\n    if (!rawCourses) continue;\n    if (!String(rawCourses).split('|').map(c => c.trim()).includes(course_id)) continue;\n\n    const studentStartDate = toISODate(student['TestPress Course Start Date']);\n    if (studentStartDate && sessionDate < studentStartDate) continue;\n\n    const dayDiff = studentStartDate\n      ? Math.floor((new Date(sessionDate) - new Date(studentStartDate)) / 86400000)\n      : 9999;\n\n    if (vpar) continue;\n    const reminderDelay =\n    hasVerbalWeek(studentStartDate, course_id)\n        ? 14\n        : 7;\n   \n\nif (dayDiff >= 0 && dayDiff < reminderDelay)\n    continue;\n\n    if (attendedEmails.includes(studentEmail)) continue;\n\n    const uid = `${studentEmail}-${course_id}-${lectureTitle}-${sessionDate}`;\n    if (seen.has(uid)) continue;\n    seen.add(uid);\n\n    result.push({\n      json: {\n        batch,\n        lecture_title: lectureTitle,\n        chapter_content_id: contentId,\n        name: student['Billing Detail Name'],\n        phone: String(student['Billing Detail Phone Number']),\n        whatsapp: String(student['Billing Detail Whatsapp Number']),\n        email: student['Email'],\n        course_id,\n        present_count: countsByContent[contentId]?.present_count ?? 0,\n        absent_count: countsByContent[contentId]?.absent_count ?? 0,\n        session_date: sessionDate\n      }\n    });\n  }\n}\n\nreturn result;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        14304,
+        3680
+      ],
+      "id": "e070017a-cee0-4452-afce-a9a017eeeb85",
+      "name": "Absentee Calculation Logic",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1jWg_rQC-7wA7jCctJLIr4sLFoDTJMKToc5tnIL-q9Xo/edit?usp=sharing",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1jWg_rQC-7wA7jCctJLIr4sLFoDTJMKToc5tnIL-q9Xo/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        13296,
+        3680
+      ],
+      "id": "723d822b-588b-43f7-950b-24b355838d06",
+      "name": "Order Export (Batch Strength, Last 1.5 years)",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "eqNkQWmqDGjFTrhq",
+          "name": "Google Sheets account 9"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = [];\nconst courseIds = [1112, 1161, 1245, 1242, 1255, 1295, 1296, 1303, 1304, 1305];\n\n// ============================================================\n// Pulls the date from the \"Manual Date (EDIT HERE)\" node.\n// Leave that field blank to run for today (normal nightly mode).\n// Put a date like \"2026-06-30\" there to test/re-run any past date.\n// ============================================================\nconst manualDate = $('Manual Date (EDIT HERE)').first().json.manual_date;\n\nconst today = manualDate ? new Date(manualDate) : new Date();\nconst todayStr = manualDate || today.toISOString().slice(0, 10);\n\nconst yesterday = new Date(today);\nyesterday.setDate(yesterday.getDate() - 1);\nconst afterStr = yesterday.toISOString().slice(0, 10);\n\nconst tomorrow = new Date(today);\ntomorrow.setDate(tomorrow.getDate() + 1);\nconst beforeStr = tomorrow.toISOString().slice(0, 10);\n\nfor (const course_id of courseIds) {\n  items.push({\n    json: {\n      course_id,\n      completed_after: afterStr,\n      completed_before: beforeStr,\n      today: todayStr\n    }\n  });\n}\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        13584,
+        3680
+      ],
+      "id": "e14148f5-f2ad-4ea3-8804-793ee7b48a3e",
+      "name": "Generate Date Course Combo Input parameters for Testpress API (Inputs of API)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = [];\n\nfor (const item of items) {\n  const d = item.json;\n\n  if (!d.name || !d.name.trim()) continue;\n\n  let course = d.lecture_title || '';\n  let time = '';\n  const match = course.match(/(.*)\\((.*)\\)/);\n  if (match) {\n    course = match[1].trim();\n    time = match[2].trim();\n  }\n\n  const rawPhone = String(d.whatsapp || d.phone || '').replace(/\\D/g, '');\n  if (!rawPhone) continue;\n\n  const fullPhone = rawPhone.startsWith('91') ? rawPhone : `91${rawPhone}`;\n  if (fullPhone.length !== 12) continue;\n\n  const phone = `+${fullPhone}`;\n\n  results.push({\n    json: {\n      messages: [\n        {\n          content: {\n            language: \"en\",\n            templateData: {\n              header: {\n                type: \"TEXT\",\n                placeholder: course\n              },\n              body: {\n                placeholders: [\n                  d.name.trim(),\n                  course,\n                  time\n                ]\n              }\n            },\n            templateName: \"missed_class_reminders_with_opt_out_v2\"\n          },\n          from: \"+918999118999\",\n          to: phone\n        }\n      ]\n    }\n  });\n}\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        14192,
+        4048
+      ],
+      "id": "296d588c-caee-4087-be8a-360c9be4c50c",
+      "name": "CodeinJS2: Format in which Double tick requires the data "
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://public.doubletick.io/whatsapp/message/template",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "key_UebvUA7BTQjDjxFacrFEPmYzkkwyZHdJIYK6TBLKvtq1kcsuIjaClLbGBV1aFGgpTKlWkB5xMpCkeg0hqwmYT8Y1vp5cPbJPSPSZYMP4OTkGzIUA9t4u8pZjVxTapY2qTXOnXC0YcPWa7S6KYoBL0iKlzNzRcBPrlqqUg0krXLb7m3UmxQYbYTHHiAduNULECT03kOGZfQa4hAHfAidy6uauSHDRafCYzwIQMtSmp64B5lRbXJnG4VeK8iaV"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        13312,
+        3984
+      ],
+      "id": "5d3370ab-533a-4f2a-b956-ded68691f539",
+      "name": "HTTP Request: Double tick- sends whatsapp messages",
+      "retryOnFail": false,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const allResults = [];\nfor (const item of items) {\n  const results = item.json.results;\n  const contentAttempts = results?.content_attempts || [];\n  const users = results?.users || [];\n  const chapterContents = results?.chapter_contents || [];\n  const todayStr = item.json.today;\n  if (contentAttempts.length === 0) continue;\n  const byContent = {};\n  for (const attempt of contentAttempts) {\n    const cid = String(attempt.chapter_content_id);\n    if (!byContent[cid]) byContent[cid] = [];\n    byContent[cid].push(attempt);\n  }\n  for (const [contentId, attempts] of Object.entries(byContent)) {\n    const attendedUserIds = [...new Set(attempts.map(a => a.user_id))];\n    const attendedEmails = attendedUserIds\n      .map(uid => users.find(u => u.id === uid)?.email?.toLowerCase())\n      .filter(Boolean);\n    const course_id = String(attempts[0].course_id);\n    const contentInfo = chapterContents.find(c => String(c.id) === contentId);\n    const lectureTitle = contentInfo?.title || `Content ${contentId}`;\n    const chapterId = String(contentInfo?.chapter_id || attempts[0]?.chapter_id || '');\n    const sessionStart = contentInfo?.start || '';\n    const sessionDate = sessionStart ? sessionStart.slice(0, 10) : item.json.completed_after;\n    allResults.push({\n      json: {\n        course_id,\n        chapter_content_id: contentId,\n        lecture_title: lectureTitle,\n        attended_emails: attendedEmails,\n        session_date: sessionDate,\n        today: todayStr,\n        chapter_id: chapterId\n      }\n    });\n  }\n}\nreturn allResults;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        14064,
+        3680
+      ],
+      "id": "cc9013b3-fa3c-4fb5-ab5a-346c30a6aeb4",
+      "name": "FORMATTING NODE: Compares the google sheet data with JSON Data",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        13888,
+        4064
+      ],
+      "id": "9e7c9a82-71c9-4412-ae31-a42e156990d0",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "jsCode": "const jwt = \"JWT eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjo4ODQ2MywidXNlcm5hbWUiOjg4NDYzLCJleHAiOjE3NzYzMTc4NDYsImVtYWlsIjoidXRwYWwyMzVAeWFob28uY29tIiwiaWQiOjg4NDYzLCJpbnN0aXR1dGUiOjE1MDl9.xcrfRS1jZA3H44ixYV0t_5HWgna7T0e5-lJG61ZtM8M\";\n\nconst allResults = [];\n\nfor (const item of items) {\n  const { course_id, completed_after, completed_before } = item.json;\n\n  let content_attempts = [];\n  let users = [];\n  let chapter_contents = [];\n\n  let url = `https://catking.testpress.in/api/v3/admin/chapter-content-attempts/?course_ids=${course_id}&content_type=7&completed_after=${completed_after}&completed_before=${completed_before}`;\n\n  while (url) {\n    const response = await helpers.request({\n      method: 'GET',\n      url,\n      headers: {\n        'Authorization': jwt,\n        'Content-Type': 'application/json'\n      },\n      json: true\n    });\n\n    const r = response.results || {};\n    content_attempts = [...content_attempts, ...(r.content_attempts || [])];\n\n    const userMap = {};\n    for (const u of [...users, ...(r.users || [])]) userMap[u.id] = u;\n    users = Object.values(userMap);\n\n    const cMap = {};\n    for (const c of [...chapter_contents, ...(r.chapter_contents || [])]) cMap[c.id] = c;\n    chapter_contents = Object.values(cMap);\n\n    url = response.next || null;\n  }\n\n  allResults.push({\n    json: { results: { content_attempts, users, chapter_contents } }\n  });\n}\n\nreturn allResults;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        13840,
+        3680
+      ],
+      "id": "c698b1d5-0ec8-478d-8068-4bdcca7bdf26",
+      "name": "TESTPRESS ATTENDANCE API"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// DAILY ATTENDANCE SUMMARY\n// Per batch -> per lecture: present, absent, % attendance.\n// Absent = student enrolled in that course (per the sheet), whose\n// course start date is on/before the session date, who did not attend.\n// ============================================================\n\n// ---- EDIT: course ID -> batch name ----\nconst batchMap = {\n  '1112': 'A1', '1161': 'M1.1', '1245': 'M1.2', '1242': 'A2', '1255': 'A3',\n  '1295': 'A4', '1296': 'M2.1', '1303': 'A5', '1304': 'B1', '1305': 'M2.2'\n};\n\n// ---- EDIT: ID of the attendance Google Sheet (the long part of its URL between /d/ and /edit) ----\nconst ATTENDANCE_SHEET_ID = '16eux3sw3qfUboiOZq0wvS7a-dpTbySgMylwBz60StoM';\nconst SHEET_URL = `https://docs.google.com/spreadsheets/d/${ATTENDANCE_SHEET_ID}/edit`;\n\nconst manualDate = $('Manual Date (EDIT HERE)').first().json.manual_date;\nconst targetDate = manualDate ? manualDate : new Date().toISOString().slice(0, 10);\n\nconst MONTHS = { jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12' };\nfunction toISODate(s) {\n  if (!s) return '';\n  s = String(s).trim();\n  if (/^\\d{4}-\\d{2}-\\d{2}/.test(s)) return s.slice(0, 10);\n  let m = s.match(/^(\\d{1,2})[\\/\\-](\\d{1,2})[\\/\\-](\\d{4})$/);\n  if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;\n  m = s.match(/^(\\d{1,2})[\\-\\s]([A-Za-z]{3,})[\\-\\s](\\d{4})$/);\n  if (m && MONTHS[m[2].slice(0,3).toLowerCase()]) {\n    return `${m[3]}-${MONTHS[m[2].slice(0,3).toLowerCase()]}-${m[1].padStart(2,'0')}`;\n  }\n  const d = new Date(s);\n  return isNaN(d) ? '' : d.toISOString().slice(0, 10);\n}\n\nconst prettyDateOf = d => new Date(d + 'T00:00:00Z')\n  .toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });\n\nconst esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');\n\n// ---- Enrolment per course from the sheet (one entry per email per course) ----\nconst sheetRows = $('Order Export (Batch Strength, Last 1.5 years)').all().map(i => i.json);\nconst enrolled = {}; // course_id -> Map(email -> earliest start date or '')\nconst studentInfo = {}; // email -> { name, phone }\nfor (const row of sheetRows) {\n  const email = row['Email']?.toLowerCase().trim();\n  if (!email) continue;\n  if (!studentInfo[email]) {\n    studentInfo[email] = {\n      name: String(row['Billing Detail Name'] || '').trim(),\n      phone: String(row['Billing Detail Whatsapp Number'] || row['Billing Detail Phone Number'] || '').trim()\n    };\n  }\n  const start = toISODate(row['TestPress Course Start Date']);\n  const ids = String(row['TestPress Course Ids'] || '').split('|').map(c => c.trim()).filter(Boolean);\n  for (const cid of ids) {\n    if (!enrolled[cid]) enrolled[cid] = new Map();\n    const map = enrolled[cid];\n    if (!map.has(email)) map.set(email, start);\n    else {\n      const prev = map.get(email);\n      if (prev && (!start || start < prev)) map.set(email, start);\n    }\n  }\n}\n\n// ---- Per-lecture counts for the target date ----\nconst rawSessions = $('FORMATTING NODE: Compares the google sheet data with JSON Data').all()\n  .map(i => i.json)\n  .filter(d => d.session_date === targetDate);\n\n// ---- Skip VPAR chapters (same rule as the reminder logic) ----\n// EDIT: paste the same JWT line used in \"Absentee Calculation Logic\"\nconst jwt = \"JWT eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJ1c2VyX2lkIjo4ODQ2MywidXNlcm5hbWUiOjg4NDYzLCJleHAiOjE3NzYzMTc4NDYsImVtYWlsIjoidXRwYWwyMzVAeWFob28uY29tIiwiaWQiOjg4NDYzLCJpbnN0aXR1dGUiOjE1MDl9.xcrfRS1jZA3H44ixYV0t_5HWgna7T0e5-lJG61ZtM8M\";\nconst VPAR_TITLE_RE = /starter\\s*module\\s*vpar|vpar/i;\nconst chapterTitleById = {};\nfor (const course_id of [...new Set(rawSessions.map(d => String(d.course_id)))]) {\n  let url = `https://catking.testpress.in/api/v2.5/admin/courses/${course_id}/chapters/?limit=100`;\n  while (url) {\n    const r = await helpers.request({\n      method: 'GET', url,\n      headers: { 'Authorization': jwt, 'Content-Type': 'application/json' },\n      json: true\n    });\n    for (const c of (r.results || [])) chapterTitleById[String(c.id)] = String(c.name || c.title || '');\n    url = r.next || null;\n  }\n}\nconst isVpar = id => VPAR_TITLE_RE.test(chapterTitleById[String(id)] || '');\n\n// ---- Merge duplicates: same lecture title in the same batch counts once ----\nconst normTitle = t => String(t || '').toLowerCase().replace(/\\s+/g, '');\nconst grouped = new Map();\nfor (const d of rawSessions) {\n  if (isVpar(d.chapter_id)) continue;\n  const cid = String(d.course_id);\n  const key = `${cid}|${normTitle(d.lecture_title)}`;\n  if (!grouped.has(key)) {\n    grouped.set(key, { course_id: cid, lecture_title: d.lecture_title, session_date: d.session_date, attended: new Set() });\n  }\n  for (const e of (d.attended_emails || [])) grouped.get(key).attended.add(String(e).toLowerCase().trim());\n}\n\nconst byBatch = {};\nconst rowsByBatch = {};\nfor (const s of grouped.values()) {\n  const cid = s.course_id;\n  const attended = s.attended;\n  let absent = 0;\n  const absentList = [];   // [name, email]\n  const presentList = [];\n  const nameOf = e => (studentInfo[e] && studentInfo[e].name) || '—';\n  for (const [email, start] of (enrolled[cid] || new Map())) {\n    if (start && s.session_date < start) continue;   // not started yet\n    if (!attended.has(email)) { absent++; absentList.push([nameOf(email), email]); }\n  }\n  for (const email of attended) presentList.push([nameOf(email), email]);\n  const sortList = arr => arr.sort((a, b) => (a[0] + a[1]).localeCompare(b[0] + b[1]));\n\n  if (!rowsByBatch[cid]) rowsByBatch[cid] = [];\n  rowsByBatch[cid].push(\n    ['📘 ' + s.lecture_title, prettyDateOf(s.session_date)],\n    ['Student Name', 'Email', 'Status'],\n    ...sortList(presentList).map(([n, e]) => [n, e, 'Present']),\n    ...sortList(absentList).map(([n, e]) => [n, e, 'Absent']),\n    [`Present: ${presentList.length}  |  Absent: ${absentList.length}  |  Total: ${presentList.length + absentList.length}`],\n    ['━━━━━━━━━━━━━━━━━━━━━━━━━━━━']   // separator (not blank, so rows stay contiguous for appending)\n  );\n  const present = attended.size;\n  const total = present + absent;\n  const pct = total ? (present / total) * 100 : 0;\n\n  if (!byBatch[cid]) byBatch[cid] = [];\n  byBatch[cid].push({ title: s.lecture_title, present, absent, pct });\n}\n\n// ---- Build the email ----\nconst prettyDate = new Date(targetDate + 'T00:00:00Z')\n  .toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });\n\nconst th = 'style=\"border:1px solid #ccc;padding:6px 12px;background:#f2f2f2;text-align:left;\"';\nconst td = 'style=\"border:1px solid #ccc;padding:6px 12px;\"';\n\nconst batchIds = Object.keys(byBatch).sort((a, b) =>\n  String(batchMap[a] || a).localeCompare(String(batchMap[b] || b), undefined, { numeric: true }));\n\nlet html = `<div style=\"font-family:Arial,sans-serif;font-size:14px;color:#222;\">`;\nhtml += `<h2 style=\"margin-bottom:4px;\">Daily Attendance Summary</h2>`;\nhtml += `<p style=\"margin-top:0;color:#555;\">${esc(prettyDate)}</p>`;\nhtml += `<p style=\"margin:12px 0 4px;\">📋 <b>Student-wise attendance (all batches, one tab per batch):</b> <a href=\"${SHEET_URL}\">Open Google Sheet</a></p>`;\n\nif (batchIds.length === 0) {\n  html += `<p>No live lectures with recorded attendance were found for this date.</p>`;\n}\n\nfor (const cid of batchIds) {\n  const label = batchMap[cid] || cid;\n  html += `<h3 style=\"margin:24px 0 8px;border-bottom:2px solid #333;padding-bottom:4px;\">Batch: ${esc(label)} <span style=\"color:#777;font-weight:normal;\">(Course ${esc(cid)})</span></h3>`;\n  for (const l of byBatch[cid].sort((a, b) => String(a.title).localeCompare(String(b.title)))) {\n    html += `<p style=\"margin:12px 0 6px;\"><b>Lecture:</b> ${esc(l.title)}</p>`;\n    html += `<table style=\"border-collapse:collapse;margin-bottom:8px;\">`;\n    html += `<tr><th ${th}>Present</th><th ${th}>Absent</th><th ${th}>Attendance %</th></tr>`;\n    html += `<tr><td ${td}>${l.present}</td><td ${td}>${l.absent}</td><td ${td}>${l.pct.toFixed(1)}%</td></tr>`;\n    html += `</table>`;\n  }\n}\nhtml += `</div>`;\n\nconst lectureCount = Object.values(byBatch).reduce((n, arr) => n + arr.length, 0);\n\nreturn [{\n  json: {\n    subject: `Daily Attendance Summary – ${prettyDate}`,\n    html,\n    date: targetDate,\n    batches: batchIds.length,\n    lectures: lectureCount,\n    sheet_url: SHEET_URL,\n    // One item per batch in batchMap, so EVERY tab is cleared and rewritten each run\n    sheet_batches: Object.keys(batchMap)\n      .sort((a, b) => String(batchMap[a]).localeCompare(String(batchMap[b]), undefined, { numeric: true }))\n      .map(cid => ({\n        batch: String(batchMap[cid]),\n        sheet_id: ATTENDANCE_SHEET_ID,\n        header: [`Batch ${String(batchMap[cid])} — Attendance for ${prettyDate}`],\n        rows: rowsByBatch[cid] || [[`No live lectures with recorded attendance on ${prettyDate}`]]\n      }))\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        14368,
+        3440
+      ],
+      "id": "885acc39-3fe4-4fec-ab50-5731713f08b3",
+      "name": "Daily Attendance Summary"
+    },
+    {
+      "parameters": {
+        "sendTo": "anukool.catking@gmail.com, anisha.catking@gmail.com ",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        14608,
+        3520
+      ],
+      "id": "b74aca14-0823-4ed7-b3de-0fce24cf8fce",
+      "name": "Send Attendance Summary Email",
+      "webhookId": "9d3b5e4a-7c6f-4a0d-9e3c-4f5a6b7c8d92",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "Uu4bFP5dZVAzfaVn",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Split Attendance by Batch1').item.json.sheet_id }}/values/{{ encodeURIComponent(\"'\" + $('Split Attendance by Batch1').item.json.batch + \"'\") }}:clear",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        15088,
+        3216
+      ],
+      "id": "ed78bd11-1cbd-41d8-8583-b118772fed4f",
+      "name": "Clear Batch Tab",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GwE5RpVjMsln0nOv",
+          "name": "Google Sheets account 10"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $('Split Attendance by Batch1').item.json.sheet_id }}/values/{{ encodeURIComponent(\"'\" + $('Split Attendance by Batch1').item.json.batch + \"'!A1\") }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "valueInputOption",
+              "value": "RAW"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ values: [$('Split Attendance by Batch1').item.json.header].concat($('Split Attendance by Batch1').item.json.rows) }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        15328,
+        3216
+      ],
+      "id": "8c2d1876-4e60-441e-9cf7-4a6ae354bdc3",
+      "name": "Write Attendance Rows",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GwE5RpVjMsln0nOv",
+          "name": "Google Sheets account 10"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "sheet_batches",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        14608,
+        3216
+      ],
+      "id": "6e39e676-9ee5-4072-9ee6-2caebede9eab",
+      "name": "Split Attendance by Batch1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://sheets.googleapis.com/v4/spreadsheets/{{ $json.sheet_id }}:batchUpdate",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ requests: [ { addSheet: { properties: { title: $json.batch } } } ] }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        14848,
+        3216
+      ],
+      "id": "7e821f23-177b-409f-a90a-95fa9295c00f",
+      "name": "Create Batch Tab (if missing)1",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "GwE5RpVjMsln0nOv",
+          "name": "Google Sheets account 10"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "Errors harmlessly when the tab already exists."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Date (EDIT HERE)": {
+      "main": [
+        [
+          {
+            "node": "Order Export (Batch Strength, Last 1.5 years)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Manual Date (EDIT HERE)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Absentee Calculation Logic": {
+      "main": [
+        [
+          {
+            "node": "CodeinJS2: Format in which Double tick requires the data ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Order Export (Batch Strength, Last 1.5 years)": {
+      "main": [
+        [
+          {
+            "node": "Generate Date Course Combo Input parameters for Testpress API (Inputs of API)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Date Course Combo Input parameters for Testpress API (Inputs of API)": {
+      "main": [
+        [
+          {
+            "node": "TESTPRESS ATTENDANCE API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CodeinJS2: Format in which Double tick requires the data ": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request: Double tick- sends whatsapp messages": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FORMATTING NODE: Compares the google sheet data with JSON Data": {
+      "main": [
+        [
+          {
+            "node": "Absentee Calculation Logic",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Daily Attendance Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "HTTP Request: Double tick- sends whatsapp messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TESTPRESS ATTENDANCE API": {
+      "main": [
+        [
+          {
+            "node": "FORMATTING NODE: Compares the google sheet data with JSON Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily Attendance Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Attendance Summary Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Split Attendance by Batch1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Batch Tab": {
+      "main": [
+        [
+          {
+            "node": "Write Attendance Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Attendance by Batch1": {
+      "main": [
+        [
+          {
+            "node": "Create Batch Tab (if missing)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Batch Tab (if missing)1": {
+      "main": [
+        [
+          {
+            "node": "Clear Batch Tab",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "f63b736d-9fe3-4287-b7ef-86aeea377435",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "418c29bb64e5f7ae24c68b82e6b43f24471403ef095953455af72a1704309cf8"
+  },
+  "nodeGroups": [],
+  "id": "zE2QTisgNyObwCun",
+  "tags": []
+}
